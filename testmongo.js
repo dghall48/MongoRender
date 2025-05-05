@@ -39,11 +39,11 @@ app.get('/', async (req, res) => {
             color: #fff; 
           }
           h1 { color: #fff; }
-          .task { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 5px; }
-          .task-complete { background-color: #4A6670; color: #fff; }
-          .task-incomplete { background-color: #1C3334; color: #fff; }
+          .task { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 5px; color: #fff; }
+          .task-complete { background-color: #376E6F; }
+          .task-incomplete { background-color: #376E6F; }
           form { margin-top: 20px; border: 1px solid #ddd; padding: 20px; border-radius: 5px; background-color: #376E6F; }
-          input, textarea { width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box; }
+          input, textarea { width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box; background-color: #1C3334; color: #fff; border: 1px solid #4A6670; }
           button { background-color: #4CAF50; color: white; padding: 10px 15px; border: none; cursor: pointer; }
           .actions { margin-top: 10px; }
           .delete-btn { background-color: #f44336; }
