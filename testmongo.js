@@ -30,12 +30,19 @@ app.get('/', async (req, res) => {
       <head>
         <title>Task Manager</title>
         <style>
-          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #2F4454;}
-          h1 { color: #333; }
+          body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background-color: #2F4454; 
+            color: #fff; 
+          }
+          h1 { color: #fff; }
           .task { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 5px; }
-          .task-complete { background-color: #e8f5e9; }
-          .task-incomplete { background-color: #fff; }
-          form { margin-top: 20px; border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
+          .task-complete { background-color: #4A6670; color: #fff; }
+          .task-incomplete { background-color: #1C3334; color: #fff; }
+          form { margin-top: 20px; border: 1px solid #ddd; padding: 20px; border-radius: 5px; background-color: #376E6F; }
           input, textarea { width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box; }
           button { background-color: #4CAF50; color: white; padding: 10px 15px; border: none; cursor: pointer; }
           .actions { margin-top: 10px; }
