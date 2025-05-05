@@ -30,7 +30,7 @@ app.get('/', async (req, res) => {
       <head>
         <title>Task Manager</title>
         <style>
-          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #2F4454;}
           h1 { color: #333; }
           .task { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 5px; }
           .task-complete { background-color: #e8f5e9; }
