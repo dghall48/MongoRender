@@ -1,9 +1,8 @@
-// Task Volunteer System with MVC, Observer, and Singleton patterns
+// Task Volunteer System
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
-const crypto = require('crypto'); // Built-in Node.js module for password hashing
+const crypto = require('crypto');
 
-// ---- SINGLETON PATTERN (T7) ----
 class DatabaseSingleton {
   constructor() {
     if (DatabaseSingleton.instance) {
@@ -35,7 +34,6 @@ class DatabaseSingleton {
   }
 }
 
-// ---- OBSERVER PATTERN (T6) ----
 class StatsObserver {
   constructor() {
     this.db = new DatabaseSingleton();
@@ -83,9 +81,6 @@ class StatsObserver {
   }
 }
 
-// ---- MVC PATTERN (T5) ----
-
-// --- MODEL ---
 class TaskModel {
   constructor() {
     this.db = new DatabaseSingleton();
@@ -104,7 +99,7 @@ class TaskModel {
     return db.collection('Tasks').find({ ownerId }).toArray();
   }
 
-  // Get tasks available for volunteering (not owned by this user and not already volunteered for)
+  // Get tasks available for volunteering
   async getTasksForVolunteering(userId) {
     const db = await this.db.connect();
     return db.collection('Tasks').find({
@@ -295,7 +290,6 @@ class StatsModel {
   }
 }
 
-// --- CONTROLLER ---
 class TaskController {
   constructor() {
     this.taskModel = new TaskModel();
@@ -523,9 +517,6 @@ class TaskController {
       res.status(500).send('Something went wrong!');
     }
   }
-
-  // --- VIEWS ---
-  
   // Landing page view
   landingPageView() {
     return `
@@ -1018,16 +1009,12 @@ class TaskController {
   }
 }
 
-// Express App Setup
 const app = express();
 const port = process.env.PORT || 3000;
-
-// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
-// Initialize controller
 const taskController = new TaskController();
 
 // Routes
@@ -1043,7 +1030,6 @@ app.post('/remove-volunteer/:taskId/:volunteerId', (req, res) => taskController.
 app.post('/toggle-task/:id', (req, res) => taskController.toggleTaskCompletion(req, res));
 app.post('/delete-task/:id', (req, res) => taskController.deleteTask(req, res));
 
-// Keep original routes for backward compatibility
 app.get('/say/:name', function(req, res) {
   res.send('Hello ' + req.params.name + '!');
 });
