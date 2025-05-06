@@ -1,7 +1,8 @@
 // testmongo.js - Task Management System with MVC, Observer and Singleton patterns
+// Using URL tokens for authentication without cookies
 const express = require('express');
 const { MongoClient, ObjectId } = require("mongodb");
-const session = require('express-session');
+const crypto = require('crypto'); // Built-in Node.js module
 
 // ---- Singleton Pattern for Database Access ----
 class DatabaseSingleton {
@@ -48,6 +49,11 @@ class DatabaseSingleton {
     const db = await this.connect();
     return db.collection('Stats');
   }
+
+  async getSessionsCollection() {
+    const db = await this.connect();
+    return db.collection('Sessions');
+  }
 }
 
 // ---- Observer Pattern for Statistics Tracking ----
@@ -63,10 +69,12 @@ class StatsObserver {
       // Count total volunteers across all tasks
       const tasks = await tasksCollection.find({}).toArray();
       let totalVolunteers = 0;
+      let uniqueVolunteers = new Set();
       
       tasks.forEach(task => {
         if (task.volunteers && Array.isArray(task.volunteers)) {
           totalVolunteers += task.volunteers.length;
+          task.volunteers.forEach(vol => uniqueVolunteers.add(vol));
         }
       });
       
@@ -77,6 +85,7 @@ class StatsObserver {
         { 
           $set: { 
             count: totalVolunteers,
+            uniqueCount: uniqueVolunteers.size,
             taskCount: tasks.length,
             lastUpdated: new Date()
           }
@@ -88,6 +97,59 @@ class StatsObserver {
     } catch (error) {
       console.error('Error updating stats:', error);
     }
+  }
+}
+
+// ---- Authentication utilities ----
+class AuthUtil {
+  // Generate a simple token
+  static generateToken() {
+    return crypto.randomBytes(32).toString('hex');
+  }
+  
+  // Middleware to check if user is authenticated
+  static async authenticate(req, res, next) {
+    // Look for token in URL query parameter
+    const token = req.query.token;
+    
+    if (!token) {
+      return res.redirect('/login');
+    }
+    
+    try {
+      // Check if session exists in the database
+      const db = new DatabaseSingleton();
+      const sessionsCollection = await db.getSessionsCollection();
+      const session = await sessionsCollection.findOne({ token });
+      
+      if (!session) {
+        return res.redirect('/login');
+      }
+      
+      // Check if session is expired (e.g., 24 hours)
+      const now = new Date();
+      if (now - session.createdAt > 24 * 60 * 60 * 1000) {
+        await sessionsCollection.deleteOne({ token });
+        return res.redirect('/login');
+      }
+      
+      // Set user ID for later use
+      req.userId = session.userId;
+      
+      // Store token for use in views
+      req.token = token;
+      
+      next();
+    } catch (error) {
+      console.error('Auth error:', error);
+      res.redirect('/login');
+    }
+  }
+  
+  // Add token to URL
+  static addTokenToUrl(url, token) {
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}token=${token}`;
   }
 }
 
@@ -224,12 +286,73 @@ class UserModel {
   }
 
   async createUser(userData) {
+    // Simple hash for password
+    const hashedPassword = crypto
+      .createHash('sha256')
+      .update(userData.password)
+      .digest('hex');
+    
     const usersCollection = await this.db.getUsersCollection();
-    // In a real app, you would hash the password
     return usersCollection.insertOne({
       username: userData.username,
-      password: userData.password,
+      password: hashedPassword,
       createdAt: new Date()
+    });
+  }
+  
+  async verifyPassword(username, password) {
+    const user = await this.getUserByUsername(username);
+    
+    if (!user) {
+      return null;
+    }
+    
+    // Hash the provided password and compare
+    const hashedPassword = crypto
+      .createHash('sha256')
+      .update(password)
+      .digest('hex');
+    
+    if (user.password === hashedPassword) {
+      return user;
+    }
+    
+    return null;
+  }
+  
+  async createSession(userId) {
+    const sessionsCollection = await this.db.getSessionsCollection();
+    
+    // Generate a unique token
+    const token = AuthUtil.generateToken();
+    
+    // Save the session
+    await sessionsCollection.insertOne({
+      userId,
+      token,
+      createdAt: new Date()
+    });
+    
+    return token;
+  }
+  
+  async deleteSession(token) {
+    const sessionsCollection = await this.db.getSessionsCollection();
+    
+    // Remove the session
+    await sessionsCollection.deleteOne({ token });
+  }
+  
+  async cleanupSessions(userId) {
+    const sessionsCollection = await this.db.getSessionsCollection();
+    
+    // Remove all sessions for this user that are older than 24 hours
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    await sessionsCollection.deleteMany({
+      userId,
+      createdAt: { $lt: yesterday }
     });
   }
 }
@@ -256,21 +379,22 @@ class TaskController {
 
   async renderDashboard(req, res) {
     try {
-      // Check if user is logged in
-      if (!req.session.userId) {
+      // Fetch user data
+      const user = await this.userModel.getUserById(req.userId);
+      
+      if (!user) {
         return res.redirect('/login');
       }
 
+      // Get token from request
+      const token = req.token;
+
       // Fetch tasks and stats
-      const user = await this.userModel.getUserById(req.session.userId);
-      const myTasks = await this.taskModel.getMyTasks(req.session.userId);
-      const volunteeringTasks = await this.taskModel.getTasksForVolunteering(req.session.userId);
-      const myVolunteeredTasks = await this.taskModel.getMyVolunteeredTasks(req.session.userId);
+      const myTasks = await this.taskModel.getMyTasks(req.userId);
+      const volunteeringTasks = await this.taskModel.getTasksForVolunteering(req.userId);
+      const myVolunteeredTasks = await this.taskModel.getMyVolunteeredTasks(req.userId);
       const stats = await this.statsModel.getStats();
 
-      // Add volunteer usernames to the tasks
-      const usersCollection = await new DatabaseSingleton().getUsersCollection();
-      
       // Process my tasks to include volunteer details
       for (const task of myTasks) {
         const volunteerIds = task.volunteers || [];
@@ -292,7 +416,8 @@ class TaskController {
         myTasks: myTasks,
         volunteeringTasks: volunteeringTasks,
         myVolunteeredTasks: myVolunteeredTasks,
-        stats: stats
+        stats: stats,
+        token: token
       });
     } catch (error) {
       console.error('Error rendering dashboard:', error);
@@ -311,14 +436,22 @@ class TaskController {
   async login(req, res) {
     try {
       const { username, password } = req.body;
-      const user = await this.userModel.getUserByUsername(username);
       
-      if (user && user.password === password) { // In a real app, use password hashing
-        req.session.userId = user._id.toString();
-        res.redirect('/');
-      } else {
-        this.renderView(res, 'login', { error: 'Invalid username or password' });
+      // Verify username and password
+      const user = await this.userModel.verifyPassword(username, password);
+      
+      if (!user) {
+        return this.renderView(res, 'login', { error: 'Invalid username or password' });
       }
+      
+      // Clean up old sessions
+      await this.userModel.cleanupSessions(user._id.toString());
+      
+      // Create a new session
+      const token = await this.userModel.createSession(user._id.toString());
+      
+      // Redirect to dashboard with token
+      res.redirect(AuthUtil.addTokenToUrl('/', token));
     } catch (error) {
       console.error('Login error:', error);
       res.status(500).send('Something went wrong!');
@@ -339,8 +472,12 @@ class TaskController {
       }
       
       const result = await this.userModel.createUser({ username, password });
-      req.session.userId = result.insertedId.toString();
-      res.redirect('/');
+      
+      // Create a session
+      const token = await this.userModel.createSession(result.insertedId.toString());
+      
+      // Redirect to dashboard with token
+      res.redirect(AuthUtil.addTokenToUrl('/', token));
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).send('Something went wrong!');
@@ -348,18 +485,27 @@ class TaskController {
   }
 
   async logout(req, res) {
-    req.session.destroy();
-    res.redirect('/login');
+    try {
+      // Get the token from query parameter
+      const token = req.query.token;
+      
+      if (token) {
+        // Remove the session
+        await this.userModel.deleteSession(token);
+      }
+      
+      res.redirect('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      res.status(500).send('Something went wrong!');
+    }
   }
 
   async createTask(req, res) {
     try {
-      if (!req.session.userId) {
-        return res.redirect('/login');
-      }
-      
-      await this.taskModel.createTask(req.body, req.session.userId);
-      res.redirect('/');
+      await this.taskModel.createTask(req.body, req.userId);
+      // Redirect with token
+      res.redirect(AuthUtil.addTokenToUrl('/', req.token));
     } catch (error) {
       console.error('Error creating task:', error);
       res.status(500).send('Something went wrong!');
@@ -368,12 +514,9 @@ class TaskController {
 
   async volunteerForTask(req, res) {
     try {
-      if (!req.session.userId) {
-        return res.redirect('/login');
-      }
-      
-      await this.taskModel.volunteerForTask(req.params.id, req.session.userId);
-      res.redirect('/');
+      await this.taskModel.volunteerForTask(req.params.id, req.userId);
+      // Redirect with token
+      res.redirect(AuthUtil.addTokenToUrl('/', req.token));
     } catch (error) {
       console.error('Error volunteering for task:', error);
       res.status(500).send('Something went wrong!');
@@ -382,18 +525,15 @@ class TaskController {
 
   async removeVolunteer(req, res) {
     try {
-      if (!req.session.userId) {
-        return res.redirect('/login');
-      }
-      
       const task = await this.taskModel.getTaskById(req.params.taskId);
       
-      if (!task || task.owner !== req.session.userId) {
+      if (!task || task.owner !== req.userId) {
         return res.status(403).send('Unauthorized');
       }
       
       await this.taskModel.removeVolunteer(req.params.taskId, req.params.volunteerId);
-      res.redirect('/');
+      // Redirect with token
+      res.redirect(AuthUtil.addTokenToUrl('/', req.token));
     } catch (error) {
       console.error('Error removing volunteer:', error);
       res.status(500).send('Something went wrong!');
@@ -402,22 +542,24 @@ class TaskController {
 
   async deleteTask(req, res) {
     try {
-      if (!req.session.userId) {
-        return res.redirect('/login');
-      }
-      
       const task = await this.taskModel.getTaskById(req.params.id);
       
-      if (!task || task.owner !== req.session.userId) {
+      if (!task || task.owner !== req.userId) {
         return res.status(403).send('Unauthorized');
       }
       
       await this.taskModel.deleteTask(req.params.id);
-      res.redirect('/');
+      // Redirect with token
+      res.redirect(AuthUtil.addTokenToUrl('/', req.token));
     } catch (error) {
       console.error('Error deleting task:', error);
       res.status(500).send('Something went wrong!');
     }
+  }
+
+  // Helper to make tokenized URLs for forms and links
+  addTokenToAction(action, token) {
+    return AuthUtil.addTokenToUrl(action, token);
   }
 
   // View rendering helper
@@ -531,14 +673,15 @@ class TaskController {
           <h1>Task Volunteer System</h1>
           <div>
             <span>Welcome, ${data.user.username}</span>
-            <a href="/logout" class="btn" style="background-color: #f44336;">Logout</a>
+            <a href="/logout?token=${data.token}" class="btn" style="background-color: #f44336;">Logout</a>
           </div>
         </header>
         
         <div class="stats">
           <h3>System Statistics</h3>
           <p>Total Tasks: ${data.stats.taskCount || 0}</p>
-          <p>Total Volunteers: ${data.stats.count || 0}</p>
+          <p>Total Volunteer Positions: ${data.stats.count || 0}</p>
+          <p>Unique Volunteers: ${data.stats.uniqueCount || 0}</p>
         </div>
         
         <div class="container">
@@ -557,7 +700,7 @@ class TaskController {
                     ? task.volunteerDetails.map(vol => `
                         <div class="volunteer-item">
                           <span>${vol.username}</span>
-                          <form action="/remove-volunteer/${task._id}/${vol.id}" method="POST" style="display: inline; margin: 0;">
+                          <form action="/remove-volunteer/${task._id}/${vol.id}?token=${data.token}" method="POST" style="display: inline; margin: 0; padding: 0; border: none; background: none;">
                             <button type="submit" class="delete-btn">Remove</button>
                           </form>
                         </div>
@@ -567,7 +710,7 @@ class TaskController {
                 </div>
                 
                 <div style="margin-top: 15px;">
-                  <form action="/delete-task/${task._id}" method="POST" style="display: inline; margin: 0; padding: 0; border: none; background: none;">
+                  <form action="/delete-task/${task._id}?token=${data.token}" method="POST" style="display: inline; margin: 0; padding: 0; border: none; background: none;">
                     <button type="submit" class="delete-btn">Delete Task</button>
                   </form>
                 </div>
@@ -575,7 +718,7 @@ class TaskController {
             `).join('')}
             
             <h3>Create New Task</h3>
-            <form action="/create-task" method="POST">
+            <form action="/create-task?token=${data.token}" method="POST">
               <div>
                 <label for="title">Title:</label>
                 <input type="text" id="title" name="title" required>
@@ -596,7 +739,7 @@ class TaskController {
                 <h3>${task.title}</h3>
                 <p>${task.description}</p>
                 <p><strong>Status:</strong> ${task.completed ? 'Completed' : 'Active'}</p>
-                <form action="/volunteer/${task._id}" method="POST">
+                <form action="/volunteer/${task._id}?token=${data.token}" method="POST">
                   <button type="submit" class="volunteer-btn">Volunteer for this Task</button>
                 </form>
               </div>
@@ -790,54 +933,6 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
-app.use(session({
-  secret: 'task-volunteer-secret',
-  resave: false,
-  saveUninitialized: false
-}));
 
 // Create controller instance
-const taskController = new TaskController();
-
-// Routes
-app.get('/', (req, res) => taskController.renderDashboard(req, res));
-app.get('/login', (req, res) => taskController.renderLoginPage(req, res));
-app.get('/register', (req, res) => taskController.renderRegisterPage(req, res));
-app.post('/login', (req, res) => taskController.login(req, res));
-app.post('/register', (req, res) => taskController.register(req, res));
-app.get('/logout', (req, res) => taskController.logout(req, res));
-app.post('/create-task', (req, res) => taskController.createTask(req, res));
-app.post('/volunteer/:id', (req, res) => taskController.volunteerForTask(req, res));
-app.post('/remove-volunteer/:taskId/:volunteerId', (req, res) => taskController.removeVolunteer(req, res));
-app.post('/delete-task/:id', (req, res) => taskController.deleteTask(req, res));
-
-// Keep the original API route for backward compatibility
-app.get('/api/mongo/:item', async (req, res) => {
-  const db = new DatabaseSingleton();
-  try {
-    const partsCollection = await (await db.connect()).collection('MyStuff');
-    const query = { partID: req.params.item };
-    const part = await partsCollection.findOne(query);
-    console.log(part);
-    res.send('Found this: ' + JSON.stringify(part));
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).send('Something went wrong!');
-  }
-});
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Server started at http://localhost:${port}`);
-  
-  // Initialize stats tracking
-  const statsObserver = new StatsObserver();
-  statsObserver.update();
-});
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  const db = new DatabaseSingleton();
-  await db.close();
-  process.exit(0);
-});
+const taskController = new
